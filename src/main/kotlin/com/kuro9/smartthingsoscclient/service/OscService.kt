@@ -19,20 +19,20 @@ class OscService(
     private val config: AppConfig
 ) : OSCPacketListener, Broadcaster<OSCMessage>(), Subscriber<DeviceStateChangeResponse> {
     private val logger = LoggerFactory.getLogger(this::class.java)
-    private val rxPort = config.oscRxPort
-    private val txPort = config.oscTxPort
 
-    private val oscTX = OSCPortOut(InetSocketAddress(InetAddress.getLocalHost(), txPort))
-    private val oscRX = OSCPortIn(InetSocketAddress(InetAddress.getLocalHost(), rxPort)).apply {
-        addPacketListener(this@OscService)
-        startListening()
-    }
+    private val oscTX = OSCPortOut(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127,0,0,1)), config.oscTxPort))
+    private val oscRX = OSCPortIn(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127,0,0,1)), config.oscRxPort))
 
     private val parameterAdressPrefix = "/avatar/parameters/"
 
     @PostConstruct
     fun onStart() {
-        logger.info("OscService started")
+        with(oscRX) {
+            addPacketListener(this@OscService)
+            startListening()
+            logger.info("Osc Started! listening=$isListening, connected=$isConnected")
+        }
+        logger.info("OscService started: Rx=${config.oscRxPort}, Tx=${config.oscTxPort}")
     }
 
     override fun onMessage(message: DeviceStateChangeResponse) {
@@ -55,6 +55,7 @@ class OscService(
 
     override fun handlePacket(event: OSCPacketEvent?) {
         val message = event!!.packet as OSCMessage
+        if(!message.address.endsWith("Light")) return
         broadcast(message)
         logger.info("${message.address}: ${message.arguments.firstOrNull()}")
     }
