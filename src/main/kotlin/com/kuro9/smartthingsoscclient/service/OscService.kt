@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.time.LocalDateTime
+import kotlin.math.pow
 
 @Service
 class OscService(
@@ -20,13 +22,32 @@ class OscService(
 ) : OSCPacketListener, Broadcaster<OSCMessage>(), Subscriber<DeviceStateChangeResponse> {
     private val logger = LoggerFactory.getLogger(this::class.java)
 
-    private val oscTX = OSCPortOut(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127,0,0,1)), config.oscTxPort))
-    private val oscRX = OSCPortIn(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127,0,0,1)), config.oscRxPort))
+    private lateinit var oscTX: OSCPortOut
+    private lateinit var oscRX: OSCPortIn
 
     private val parameterAdressPrefix = "/avatar/parameters/"
 
+    private var lastControlMap = mutableMapOf<String, LocalDateTime>()
+
     @PostConstruct
     fun onStart() {
+        var successFlag = false
+        lateinit var exception: Throwable
+
+        for(i in 0..5) {
+            if(kotlin.runCatching {
+                oscTX = OSCPortOut(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127,0,0,1)), config.oscTxPort))
+                oscRX = OSCPortIn(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127,0,0,1)), config.oscRxPort))
+            }.onFailure {
+                logger.error("Error During Creating Osc Connection. RetryCount=${i}/5", it)
+                    exception = it
+                Thread.sleep(1000L * (2.0.pow(i + 1.0)).toLong())
+            }.onSuccess { successFlag = true }.isSuccess) break
+        }
+
+        if (successFlag.not()) throw RuntimeException("Osc Service Failed with Err. Terminate.", exception)
+
+
         with(oscRX) {
             addPacketListener(this@OscService)
             startListening()
@@ -56,8 +77,17 @@ class OscService(
     override fun handlePacket(event: OSCPacketEvent?) {
         val message = event!!.packet as OSCMessage
         if(!message.address.endsWith("Light")) return
-        broadcast(message)
-        logger.info("${message.address}: ${message.arguments.firstOrNull()}")
+
+        val lastControl = lastControlMap[message.address] ?: LocalDateTime.MIN
+        if (LocalDateTime.now().isAfter(lastControl.plusSeconds(2L))) {
+            broadcast(message)
+            logger.info("${message.address}: ${message.arguments.firstOrNull()}")
+        }
+        else {
+            logger.info("[IGNORE] ${message.address}: ${message.arguments.firstOrNull()}")
+        }
+
+        lastControlMap[message.address] = LocalDateTime.now()
     }
 
     override fun handleBadData(event: OSCBadDataEvent?) {
